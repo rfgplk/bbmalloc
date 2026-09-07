@@ -1,0 +1,398 @@
+builddir = bin
+micron = /code/C++/micron
+cxx = g++
+cxx_arm32 = /usr/gcc-linaro/bin/arm-none-linux-gnueabihf-g++
+cxx_arm64 = /usr/gcc-linaro-aarch64/bin/aarch64-none-linux-gnu-g++
+
+warn = -Wall -Wextra -Wpedantic -Wno-variadic-macros -Wno-psabi -Wpointer-arith -Wcast-qual -Wvla -Werror=return-type
+inc = -Isrc -I$micron
+hosted = -std=c++26 -O2 -march=native $warn $inc
+debug = -std=c++26 -O1 -g -march=native $warn $inc
+rigor = -std=c++26 -O2 -march=native -DMICRON_ALLOCATOR_CHECKS $warn $inc
+bench = -std=c++26 -O2 -march=native -fno-stack-protector -fno-lto $warn $inc
+
+kx = -std=c++23 -O2 -c -ffreestanding -fno-exceptions -fno-rtti -mno-sse -mno-mmx -mno-80387 -mno-red-zone -mcmodel=kernel -fno-stack-protector -DMICRON_NO_SIMD -DMICRON_NO_FP $warn $inc
+a32 = -std=c++23 -O2 -c -ffreestanding -fno-exceptions -fno-rtti -mfloat-abi=soft -fno-stack-protector -DMICRON_NO_SIMD -DMICRON_NO_FP $warn $inc
+a64 = -std=c++23 -O2 -c -ffreestanding -fno-exceptions -fno-rtti -mgeneral-regs-only -fno-stack-protector -DMICRON_NO_SIMD -DMICRON_NO_FP $warn $inc
+i386 = -std=c++23 -O2 -c -m32 -ffreestanding -fno-exceptions -fno-rtti -mno-sse -mno-mmx -mno-80387 -fno-stack-protector -DMICRON_NO_SIMD -DMICRON_NO_FP $warn $inc
+
+rule cc_compile_cmnd
+  command = $cxx $hosted $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = hosted $out
+rule cc_compile_cmnd_debug
+  command = $cxx $debug $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = debug $out
+rule cc_compile_cmnd_rigor
+  command = $cxx $rigor $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = rigor $out
+rule cc_compile_cmnd_bench
+  command = $cxx $bench $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = bench $out
+rule cc_compile_cmnd_obj
+  command = $cxx -std=c++26 -O2 -c -march=native $warn $inc $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = object $out
+rule cc_cross_x86k
+  command = $cxx $kx $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = x86-kernel $out
+rule cc_cross_i386
+  command = $cxx $i386 $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = i386 $out
+rule cc_cross_arm32
+  command = $cxx_arm32 $a32 $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = arm32 $out
+rule cc_cross_arm64
+  command = $cxx_arm64 $a64 $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = arm64 $out
+rule codegen_gate
+  command = python3 scripts/check_codegen.py $in --arch $arch > $out.log && touch $out
+  description = codegen gate $in
+rule codegen_negative
+  command = python3 scripts/check_codegen.py $in --arch $arch --expect-nonzero > $out.log && touch $out
+  description = codegen negative control $in
+rule shim_gate
+  command = python3 scripts/check_shim.py $in > $out.log && touch $out
+  description = C shim symbol gate $in
+rule shim_negative
+  command = python3 scripts/check_shim.py $in --expect-missing > $out.log && touch $out
+  description = C shim negative control $in
+rule hot_gate
+  command = python3 scripts/check_hotpath.py $in --max-branches $maxbr > $out.log && touch $out
+  description = hot-path gate $in
+rule hot_negative
+  command = python3 scripts/check_hotpath.py $in --max-branches $maxbr --expect-fail > $out.log && touch $out
+  description = hot-path negative $in
+
+build bin/test_rigor_bb_buddy: cc_compile_cmnd_debug tests/rigor/bb_buddy.cpp
+build bin/test_rigor_bb_buddy_top_only: cc_compile_cmnd_debug tests/rigor/bb_buddy.cpp
+  defs = -DBB_SEED_TOP_ONLY
+
+build bbmalloc_rigor: phony bbmalloc_rigor_all
+build bbmalloc_negative: phony bin/test_rigor_bb_buddy_top_only bin/test_rigor_bbmalloc_grow_neg bin/test_rigor_bbmalloc_grow_off_neg bbmalloc_fuzz_negative
+build bbmalloc_tests: phony bbmalloc_core bbmalloc_rigor bbmalloc_seam bbmalloc_hardening bbmalloc_fuzz bbmalloc_negative
+
+pool4m = -DMICRON_BB_STATIC_POOL=4194304
+growpool = -DMICRON_BB_PORT_POOL=262144 -DMICRON_BB_MAX_REGIONS=8
+grow = $growpool -DMICRON_BB_PORT_GROW=262144
+attach4m = -DBB_TEST_ATTACH -DBB_TEST_POOL_BYTES=4194304
+
+build bin/test_rigor_bb_tlsf: cc_compile_cmnd_debug tests/rigor/bb_tlsf.cpp
+build bin/test_rigor_bbmalloc: cc_compile_cmnd_debug tests/rigor/bbmalloc.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_attach: cc_compile_cmnd_debug tests/rigor/bbmalloc.cpp
+  defs = $attach4m
+build bin/test_rigor_bbmalloc_sizes: cc_compile_cmnd_debug tests/rigor/bbmalloc_sizes.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_overlap_probe: cc_compile_cmnd tests/rigor/bbmalloc_overlap_probe.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_realloc: cc_compile_cmnd_debug tests/rigor/bbmalloc_realloc.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_exhaust: cc_compile_cmnd_debug tests/rigor/bbmalloc_exhaust.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/test_rigor_bbmalloc_reset: cc_compile_cmnd_debug tests/rigor/bbmalloc_reset.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_grow: cc_compile_cmnd_debug tests/rigor/bbmalloc_grow.cpp
+  defs = $grow
+build bin/test_rigor_bbmalloc_grow_off: cc_compile_cmnd_debug tests/rigor/bbmalloc_grow.cpp
+  defs = $growpool
+build bin/test_rigor_bbmalloc_grow_neg: cc_compile_cmnd_debug tests/rigor/bbmalloc_grow.cpp
+  defs = $grow -DBB_GROW_NEGATIVE
+build bin/test_rigor_bbmalloc_grow_off_neg: cc_compile_cmnd_debug tests/rigor/bbmalloc_grow.cpp
+  defs = $growpool -DBB_GROW_NEGATIVE
+build bin/test_rigor_bbmalloc_regions: cc_compile_cmnd_debug tests/rigor/bbmalloc_regions.cpp
+  defs = -DMICRON_BB_MAX_REGIONS=4
+build bin/test_rigor_bbmalloc_aligned: cc_compile_cmnd_debug tests/rigor/bbmalloc_aligned.cpp
+  defs = $pool4m
+build bin/test_core_alloc_free: cc_compile_cmnd_debug tests/core/bbmalloc_alloc_free.cpp
+  defs = $pool4m
+build bin/test_core_info: cc_compile_cmnd_debug tests/core/bbmalloc_info.cpp
+  defs = $pool4m
+build bin/test_core_imm: cc_compile_cmnd_debug tests/core/bbmalloc_imm.cpp
+  defs = $pool4m
+build bin/test_core_regions_smoke: cc_compile_cmnd_debug tests/core/bbmalloc_regions_smoke.cpp
+
+build bbmalloc_core: phony bin/test_core_alloc_free bin/test_core_info bin/test_core_imm bin/test_core_regions_smoke
+build bbmalloc_rigor_all: phony bin/test_rigor_bbmalloc_grow bin/test_rigor_bbmalloc_grow_off bin/test_rigor_bb_buddy bin/test_rigor_bb_tlsf bin/test_rigor_bbmalloc bin/test_rigor_bbmalloc_attach bin/test_rigor_bbmalloc_sizes bin/test_rigor_bbmalloc_overlap_probe bin/test_rigor_bbmalloc_realloc bin/test_rigor_bbmalloc_exhaust bin/test_rigor_bbmalloc_reset bin/test_rigor_bbmalloc_regions bin/test_rigor_bbmalloc_aligned
+
+build bin/test_rigor_bbmalloc_traits: cc_compile_cmnd_rigor tests/rigor/bbmalloc_traits.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_containers: cc_compile_cmnd_rigor tests/rigor/bbmalloc_containers.cpp
+  defs = $pool4m
+build bin/test_rigor_bbmalloc_harden: cc_compile_cmnd_debug tests/rigor/bbmalloc_harden.cpp
+  defs = $pool4m -DMICRON_BB_REDZONE=1 -DMICRON_BB_POISON_ON_FREE=1 -DMICRON_BB_DOUBLE_FREE_ACTION=1
+build bin/test_rigor_bbmalloc_stats: cc_compile_cmnd_debug tests/rigor/bbmalloc_stats.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/test_rigor_bbmalloc_c_aligned: cc_compile_cmnd_debug tests/rigor/bbmalloc_c_aligned.cpp
+  defs = $pool4m -DBBMALLOC_C_SHIM
+build bin/test_rigor_bbmalloc_soak: cc_compile_cmnd tests/rigor/bbmalloc_soak.cpp
+  defs = $pool4m
+
+quiet = -DMICRON_BB_DOUBLE_FREE_ACTION=0
+fuzzfast = -DBB_FUZZ_OPS=60000u -DBB_FUZZ_SEEDS=3u
+
+build bin/test_fuzz_api: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet $fuzzfast
+build bin/test_fuzz_api_attach: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $attach4m $quiet $fuzzfast
+build bin/test_fuzz_api_rz: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet $fuzzfast -DMICRON_BB_REDZONE=1 -DMICRON_BB_POISON_ON_FREE=1 -DMICRON_BB_STATS
+build bin/test_fuzz_api_cache: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet $fuzzfast -DMICRON_BB_CACHE_CAP=4 -DMICRON_BB_CACHE_MAX_ORDER=8
+build bin/test_fuzz_api_tiny: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = -DMICRON_BB_STATIC_POOL=262144 -D__BB_TINY -DBB_FUZZ_POOL_BYTES=262144 $quiet $fuzzfast
+build bin/test_fuzz_api_nolinks: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet $fuzzfast -DMICRON_BB_LINK_CHECKS=0
+build bin/test_fuzz_hostile: cc_compile_cmnd tests/fuzz/bb_fuzz_hostile.cpp
+  defs = $pool4m $quiet
+build bin/test_fuzz_hostile_rz: cc_compile_cmnd tests/fuzz/bb_fuzz_hostile.cpp
+  defs = $pool4m $quiet -DMICRON_BB_REDZONE=1 -DMICRON_BB_ZERO_ON_FREE=1
+build bin/test_fuzz_tiers: cc_compile_cmnd tests/fuzz/bb_fuzz_tiers.cpp
+build bin/test_fuzz_api_deep: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet
+build bin/test_fuzz_tiers_deep: cc_compile_cmnd tests/fuzz/bb_fuzz_tiers.cpp
+  defs = -DBB_FUZZ_GEOMETRIES=1200u -DBB_FUZZ_TIER_OPS=120000u
+
+build bin/test_fuzz_api_neg_overlap: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet -DBB_FUZZ_OPS=20000u -DBB_FUZZ_SEEDS=1u -DBB_FUZZ_NEGATIVE=1
+build bin/test_fuzz_api_neg_fingerprint: cc_compile_cmnd tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet -DBB_FUZZ_OPS=20000u -DBB_FUZZ_SEEDS=1u -DBB_FUZZ_NEGATIVE=2
+
+build bbmalloc_fuzz: phony bin/test_fuzz_api bin/test_fuzz_api_attach bin/test_fuzz_api_rz bin/test_fuzz_api_cache bin/test_fuzz_api_tiny bin/test_fuzz_api_nolinks bin/test_fuzz_hostile bin/test_fuzz_hostile_rz bin/test_fuzz_tiers
+build bbmalloc_fuzz_deep: phony bin/test_fuzz_api_deep bin/test_fuzz_tiers_deep
+build bbmalloc_fuzz_negative: phony bin/test_fuzz_api_neg_overlap bin/test_fuzz_api_neg_fingerprint
+
+build bin/shim/with.o: cc_compile_cmnd_obj tests/compiletests/bb_shim.cpp
+  defs = $pool4m -DBBMALLOC_C_SHIM
+build bin/shim/without.o: cc_compile_cmnd_obj tests/compiletests/bb_shim.cpp
+  defs = $pool4m
+build bin/shim/with.gate: shim_gate bin/shim/with.o
+build bin/shim/without.gate: shim_negative bin/shim/without.o
+build bbmalloc_shim_gate: phony bin/shim/with.gate bin/shim/without.gate
+
+build bin/hot/fast.o: cc_compile_cmnd_obj tests/compiletests/bb_hot.cpp
+  defs = $pool4m
+build bin/hot/noinline.o: cc_compile_cmnd_obj tests/compiletests/bb_hot.cpp
+  defs = $pool4m -DBB_HOT_GATE_NEGATIVE
+build bin/hot/fast.gate: hot_gate bin/hot/fast.o
+  maxbr = 40
+build bin/hot/noinline.gate: hot_negative bin/hot/noinline.o
+  maxbr = 40
+build bbmalloc_hot_gate: phony bin/hot/fast.gate bin/hot/noinline.gate
+
+build bin/test_rigor_bbmalloc_traits_rz: cc_compile_cmnd_rigor tests/rigor/bbmalloc_traits.cpp
+  defs = $pool4m -DMICRON_BB_REDZONE=1
+build bin/test_rigor_bbmalloc_containers_rz: cc_compile_cmnd_rigor tests/rigor/bbmalloc_containers.cpp
+  defs = $pool4m -DMICRON_BB_REDZONE=1
+
+build bin/cross/x86k/bb_core.o: cc_cross_x86k tests/compiletests/bb_core.cpp
+build bin/cross/x86k/bb_core.gate: codegen_gate bin/cross/x86k/bb_core.o
+  arch = x86
+build bin/cross/i386/bb_core.o: cc_cross_i386 tests/compiletests/bb_core.cpp
+build bin/cross/i386/bb_core.gate: codegen_gate bin/cross/i386/bb_core.o
+  arch = x86
+build bin/cross/arm32/bb_core.o: cc_cross_arm32 tests/compiletests/bb_core.cpp
+build bin/cross/arm32/bb_core.gate: codegen_gate bin/cross/arm32/bb_core.o
+  arch = arm32
+build bin/cross/arm64/bb_core.o: cc_cross_arm64 tests/compiletests/bb_core.cpp
+build bin/cross/arm64/bb_core.gate: codegen_gate bin/cross/arm64/bb_core.o
+  arch = arm64
+build bin/cross/x86k_tiny/bb_core.o: cc_cross_x86k tests/compiletests/bb_core.cpp
+  defs = -D__BB_TINY
+build bin/cross/x86k_tiny/bb_core.gate: codegen_gate bin/cross/x86k_tiny/bb_core.o
+  arch = x86
+build bin/cross/x86k_kernel/bb_core.o: cc_cross_x86k tests/compiletests/bb_core.cpp
+  defs = -D__BB_KERNEL -DMICRON_NO_TLS -DMICRON_BB_STATS -DMICRON_BB_REDZONE=1
+build bin/cross/x86k_kernel/bb_core.gate: codegen_gate bin/cross/x86k_kernel/bb_core.o
+  arch = x86
+build bin/cross/x86k_oz/bb_core.o: cc_cross_x86k tests/compiletests/bb_core.cpp
+  defs = -Oz -DMICRON_BB_NO_DIAG -DMICRON_BB_STATIC_POOL=65536 -D__BB_TINY
+build bin/cross/x86k_oz/bb_core.gate: codegen_gate bin/cross/x86k_oz/bb_core.o
+  arch = x86
+build bin/cross/x86k_nolinks/bb_core.o: cc_cross_x86k tests/compiletests/bb_core.cpp
+  defs = -DMICRON_BB_LINK_CHECKS=0
+build bin/cross/x86k_nolinks/bb_core.gate: codegen_gate bin/cross/x86k_nolinks/bb_core.o
+  arch = x86
+build bin/cross/arm32_tiny/bb_core.o: cc_cross_arm32 tests/compiletests/bb_core.cpp
+  defs = -D__BB_TINY -DMICRON_NO_TLS
+build bin/cross/arm32_tiny/bb_core.gate: codegen_gate bin/cross/arm32_tiny/bb_core.o
+  arch = arm32
+build bin/cross/arm64_kernel/bb_core.o: cc_cross_arm64 tests/compiletests/bb_core.cpp
+  defs = -D__BB_KERNEL -DMICRON_NO_TLS
+build bin/cross/arm64_kernel/bb_core.gate: codegen_gate bin/cross/arm64_kernel/bb_core.o
+  arch = arm64
+
+build bin/cross/negative/stub.o: cc_compile_cmnd_obj $micron/tests/compiletests/barebones_core.cpp
+  defs = -DMICRON_BAREBONES_ALLOC
+build bin/cross/negative/stub.gate: codegen_negative bin/cross/negative/stub.o
+  arch = x86
+
+build bbmalloc_cross: phony bin/cross/x86k/bb_core.gate bin/cross/i386/bb_core.gate bin/cross/arm32/bb_core.gate bin/cross/arm64/bb_core.gate bin/cross/x86k_tiny/bb_core.gate bin/cross/x86k_kernel/bb_core.gate bin/cross/x86k_oz/bb_core.gate bin/cross/x86k_nolinks/bb_core.gate bin/cross/arm32_tiny/bb_core.gate bin/cross/arm64_kernel/bb_core.gate bin/cross/negative/stub.gate bbmalloc_cross_seam bbmalloc_shim_gate bbmalloc_hot_gate
+build bbmalloc_seam: phony bin/test_rigor_bbmalloc_traits bin/test_rigor_bbmalloc_containers bin/test_rigor_bbmalloc_traits_rz bin/test_rigor_bbmalloc_containers_rz
+build bbmalloc_hardening: phony bin/test_rigor_bbmalloc_harden bin/test_rigor_bbmalloc_stats bin/test_rigor_bbmalloc_c_aligned
+build bbmalloc_soak: phony bin/test_rigor_bbmalloc_soak
+
+build bin/bench_bbmalloc: cc_compile_cmnd_bench benches/bbmalloc_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432
+build bin/bench_bbmalloc_hot: cc_compile_cmnd_bench benches/bbmalloc_hot_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432
+build bin/bench_bbmalloc_interleaved: cc_compile_cmnd_bench benches/bbmalloc_interleaved_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432
+build bin/bench_bbmalloc_latency: cc_compile_cmnd_bench benches/bbmalloc_latency_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432
+build bin/bench_bbmalloc_hot_sheets64: cc_compile_cmnd_bench benches/bbmalloc_hot_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432 -DMICRON_BB_MAX_SHEETS=64
+build bin/bench_bbmalloc_sheets64: cc_compile_cmnd_bench benches/bbmalloc_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432 -DMICRON_BB_MAX_SHEETS=64
+build bin/bench_bbmalloc_nolinks: cc_compile_cmnd_bench benches/bbmalloc_bench.cpp
+  defs = -DMICRON_BB_STATIC_POOL=33554432 -DMICRON_BB_LINK_CHECKS=0
+build bbmalloc_benches: phony bin/bench_bbmalloc bin/bench_bbmalloc_hot bin/bench_bbmalloc_interleaved bin/bench_bbmalloc_latency bin/bench_bbmalloc_hot_sheets64 bin/bench_bbmalloc_sheets64 bin/bench_bbmalloc_nolinks
+
+build bin/cross/x86k_seam/bb_seam.o: cc_cross_x86k tests/compiletests/bb_seam.cpp
+  defs = -DMICRON_NO_TLS
+build bin/cross/x86k_seam/bb_seam.gate: codegen_gate bin/cross/x86k_seam/bb_seam.o
+  arch = x86
+build bin/cross/arm32_seam/bb_seam.o: cc_cross_arm32 tests/compiletests/bb_seam.cpp
+  defs = -DMICRON_NO_TLS
+build bin/cross/arm32_seam/bb_seam.gate: codegen_gate bin/cross/arm32_seam/bb_seam.o
+  arch = arm32
+build bin/cross/arm64_seam/bb_seam.o: cc_cross_arm64 tests/compiletests/bb_seam.cpp
+  defs = -DMICRON_NO_TLS
+build bin/cross/arm64_seam/bb_seam.gate: codegen_gate bin/cross/arm64_seam/bb_seam.o
+  arch = arm64
+build bbmalloc_cross_seam: phony bin/cross/x86k_seam/bb_seam.gate bin/cross/arm32_seam/bb_seam.gate bin/cross/arm64_seam/bb_seam.gate
+
+build bin/example_static_pool: cc_compile_cmnd examples/static_pool.cpp
+  defs = -DMICRON_BB_STATIC_POOL=262144 -D__BB_TINY
+build bin/cross/arm32_example/linker_pool.o: cc_cross_arm32 examples/linker_pool.cpp
+  defs = -DMICRON_BB_LINKER_POOL -D__BB_TINY -DMICRON_NO_TLS
+build bin/cross/x86k_example/static_pool.o: cc_cross_x86k examples/static_pool.cpp
+  defs = -DMICRON_BB_STATIC_POOL=262144 -D__BB_TINY -DMICRON_NO_TLS
+build bbmalloc_examples: phony bin/example_static_pool bin/cross/arm32_example/linker_pool.o bin/cross/x86k_example/static_pool.o
+
+q32 = -std=c++26 -O2 -march=armv7-a -mfpu=neon -mfloat-abi=hard $warn $inc
+q64 = -std=c++26 -O2 $warn $inc
+rule cc_qemu_arm32
+  command = $cxx_arm32 $q32 $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = qemu-arm32 $out
+rule cc_qemu_arm64
+  command = $cxx_arm64 $q64 $defs -MMD -MF $out.d $in -o $out
+  depfile = $out.d
+  deps = gcc
+  description = qemu-arm64 $out
+
+build bin/qemu/arm32/test_core_alloc_free: cc_qemu_arm32 tests/core/bbmalloc_alloc_free.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_core_alloc_free: cc_qemu_arm64 tests/core/bbmalloc_alloc_free.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_core_info: cc_qemu_arm32 tests/core/bbmalloc_info.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_core_info: cc_qemu_arm64 tests/core/bbmalloc_info.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_core_imm: cc_qemu_arm32 tests/core/bbmalloc_imm.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_core_imm: cc_qemu_arm64 tests/core/bbmalloc_imm.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_core_regions_smoke: cc_qemu_arm32 tests/core/bbmalloc_regions_smoke.cpp
+build bin/qemu/arm64/test_core_regions_smoke: cc_qemu_arm64 tests/core/bbmalloc_regions_smoke.cpp
+build bin/qemu/arm32/test_rigor_bb_buddy: cc_qemu_arm32 tests/rigor/bb_buddy.cpp
+build bin/qemu/arm64/test_rigor_bb_buddy: cc_qemu_arm64 tests/rigor/bb_buddy.cpp
+build bin/qemu/arm32/test_rigor_bb_buddy_top_only: cc_qemu_arm32 tests/rigor/bb_buddy.cpp
+  defs = -DBB_SEED_TOP_ONLY
+build bin/qemu/arm64/test_rigor_bb_buddy_top_only: cc_qemu_arm64 tests/rigor/bb_buddy.cpp
+  defs = -DBB_SEED_TOP_ONLY
+build bin/qemu/arm32/test_rigor_bb_tlsf: cc_qemu_arm32 tests/rigor/bb_tlsf.cpp
+build bin/qemu/arm64/test_rigor_bb_tlsf: cc_qemu_arm64 tests/rigor/bb_tlsf.cpp
+build bin/qemu/arm32/test_rigor_bbmalloc: cc_qemu_arm32 tests/rigor/bbmalloc.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc: cc_qemu_arm64 tests/rigor/bbmalloc.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_attach: cc_qemu_arm32 tests/rigor/bbmalloc.cpp
+  defs = $attach4m
+build bin/qemu/arm64/test_rigor_bbmalloc_attach: cc_qemu_arm64 tests/rigor/bbmalloc.cpp
+  defs = $attach4m
+build bin/qemu/arm32/test_rigor_bbmalloc_sizes: cc_qemu_arm32 tests/rigor/bbmalloc_sizes.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc_sizes: cc_qemu_arm64 tests/rigor/bbmalloc_sizes.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_overlap_probe: cc_qemu_arm32 tests/rigor/bbmalloc_overlap_probe.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc_overlap_probe: cc_qemu_arm64 tests/rigor/bbmalloc_overlap_probe.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_realloc: cc_qemu_arm32 tests/rigor/bbmalloc_realloc.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc_realloc: cc_qemu_arm64 tests/rigor/bbmalloc_realloc.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_exhaust: cc_qemu_arm32 tests/rigor/bbmalloc_exhaust.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/qemu/arm64/test_rigor_bbmalloc_exhaust: cc_qemu_arm64 tests/rigor/bbmalloc_exhaust.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/qemu/arm32/test_rigor_bbmalloc_reset: cc_qemu_arm32 tests/rigor/bbmalloc_reset.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc_reset: cc_qemu_arm64 tests/rigor/bbmalloc_reset.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_regions: cc_qemu_arm32 tests/rigor/bbmalloc_regions.cpp
+  defs = -DMICRON_BB_MAX_REGIONS=4
+build bin/qemu/arm64/test_rigor_bbmalloc_regions: cc_qemu_arm64 tests/rigor/bbmalloc_regions.cpp
+  defs = -DMICRON_BB_MAX_REGIONS=4
+build bin/qemu/arm32/test_rigor_bbmalloc_aligned: cc_qemu_arm32 tests/rigor/bbmalloc_aligned.cpp
+  defs = $pool4m
+build bin/qemu/arm64/test_rigor_bbmalloc_aligned: cc_qemu_arm64 tests/rigor/bbmalloc_aligned.cpp
+  defs = $pool4m
+build bin/qemu/arm32/test_rigor_bbmalloc_traits: cc_qemu_arm32 tests/rigor/bbmalloc_traits.cpp
+  defs = $pool4m -DMICRON_ALLOCATOR_CHECKS
+build bin/qemu/arm64/test_rigor_bbmalloc_traits: cc_qemu_arm64 tests/rigor/bbmalloc_traits.cpp
+  defs = $pool4m -DMICRON_ALLOCATOR_CHECKS
+build bin/qemu/arm32/test_rigor_bbmalloc_containers: cc_qemu_arm32 tests/rigor/bbmalloc_containers.cpp
+  defs = $pool4m -DMICRON_ALLOCATOR_CHECKS
+build bin/qemu/arm64/test_rigor_bbmalloc_containers: cc_qemu_arm64 tests/rigor/bbmalloc_containers.cpp
+  defs = $pool4m -DMICRON_ALLOCATOR_CHECKS
+build bin/qemu/arm32/test_rigor_bbmalloc_harden: cc_qemu_arm32 tests/rigor/bbmalloc_harden.cpp
+  defs = $pool4m -DMICRON_BB_REDZONE=1 -DMICRON_BB_POISON_ON_FREE=1 -DMICRON_BB_DOUBLE_FREE_ACTION=1
+build bin/qemu/arm64/test_rigor_bbmalloc_harden: cc_qemu_arm64 tests/rigor/bbmalloc_harden.cpp
+  defs = $pool4m -DMICRON_BB_REDZONE=1 -DMICRON_BB_POISON_ON_FREE=1 -DMICRON_BB_DOUBLE_FREE_ACTION=1
+build bin/qemu/arm32/test_rigor_bbmalloc_stats: cc_qemu_arm32 tests/rigor/bbmalloc_stats.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/qemu/arm64/test_rigor_bbmalloc_stats: cc_qemu_arm64 tests/rigor/bbmalloc_stats.cpp
+  defs = $pool4m -DMICRON_BB_STATS
+build bin/qemu/arm32/test_rigor_bbmalloc_c_aligned: cc_qemu_arm32 tests/rigor/bbmalloc_c_aligned.cpp
+  defs = $pool4m -DBBMALLOC_C_SHIM
+build bin/qemu/arm64/test_rigor_bbmalloc_c_aligned: cc_qemu_arm64 tests/rigor/bbmalloc_c_aligned.cpp
+  defs = $pool4m -DBBMALLOC_C_SHIM
+build bin/qemu/arm32/test_rigor_bbmalloc_soak: cc_qemu_arm32 tests/rigor/bbmalloc_soak.cpp
+  defs = $pool4m -DSOAK_OPS=1000000u -DSOAK_SWEEP_EVERY=50000u -DSOAK_FRAG_EVERY=10000u
+build bin/qemu/arm64/test_rigor_bbmalloc_soak: cc_qemu_arm64 tests/rigor/bbmalloc_soak.cpp
+  defs = $pool4m -DSOAK_OPS=1000000u -DSOAK_SWEEP_EVERY=50000u -DSOAK_FRAG_EVERY=10000u
+build bin/qemu/arm32/test_fuzz_api: cc_qemu_arm32 tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet -DBB_FUZZ_OPS=30000u -DBB_FUZZ_SEEDS=2u
+build bin/qemu/arm64/test_fuzz_api: cc_qemu_arm64 tests/fuzz/bb_fuzz_api.cpp
+  defs = $pool4m $quiet -DBB_FUZZ_OPS=30000u -DBB_FUZZ_SEEDS=2u
+build bin/qemu/arm32/test_fuzz_hostile: cc_qemu_arm32 tests/fuzz/bb_fuzz_hostile.cpp
+  defs = $pool4m $quiet
+build bin/qemu/arm64/test_fuzz_hostile: cc_qemu_arm64 tests/fuzz/bb_fuzz_hostile.cpp
+  defs = $pool4m $quiet
+build bin/qemu/arm32/test_fuzz_tiers: cc_qemu_arm32 tests/fuzz/bb_fuzz_tiers.cpp
+  defs = -DBB_FUZZ_GEOMETRIES=60u
+build bin/qemu/arm64/test_fuzz_tiers: cc_qemu_arm64 tests/fuzz/bb_fuzz_tiers.cpp
+  defs = -DBB_FUZZ_GEOMETRIES=60u
+build bbmalloc_qemu_arm32: phony bin/qemu/arm32/test_fuzz_api bin/qemu/arm32/test_fuzz_hostile bin/qemu/arm32/test_fuzz_tiers bin/qemu/arm32/test_core_alloc_free bin/qemu/arm32/test_core_info bin/qemu/arm32/test_core_imm bin/qemu/arm32/test_core_regions_smoke bin/qemu/arm32/test_rigor_bb_buddy bin/qemu/arm32/test_rigor_bb_buddy_top_only bin/qemu/arm32/test_rigor_bb_tlsf bin/qemu/arm32/test_rigor_bbmalloc bin/qemu/arm32/test_rigor_bbmalloc_attach bin/qemu/arm32/test_rigor_bbmalloc_sizes bin/qemu/arm32/test_rigor_bbmalloc_overlap_probe bin/qemu/arm32/test_rigor_bbmalloc_realloc bin/qemu/arm32/test_rigor_bbmalloc_exhaust bin/qemu/arm32/test_rigor_bbmalloc_reset bin/qemu/arm32/test_rigor_bbmalloc_regions bin/qemu/arm32/test_rigor_bbmalloc_aligned bin/qemu/arm32/test_rigor_bbmalloc_traits bin/qemu/arm32/test_rigor_bbmalloc_containers bin/qemu/arm32/test_rigor_bbmalloc_harden bin/qemu/arm32/test_rigor_bbmalloc_stats bin/qemu/arm32/test_rigor_bbmalloc_c_aligned bin/qemu/arm32/test_rigor_bbmalloc_soak
+build bbmalloc_qemu_arm64: phony bin/qemu/arm64/test_fuzz_api bin/qemu/arm64/test_fuzz_hostile bin/qemu/arm64/test_fuzz_tiers bin/qemu/arm64/test_core_alloc_free bin/qemu/arm64/test_core_info bin/qemu/arm64/test_core_imm bin/qemu/arm64/test_core_regions_smoke bin/qemu/arm64/test_rigor_bb_buddy bin/qemu/arm64/test_rigor_bb_buddy_top_only bin/qemu/arm64/test_rigor_bb_tlsf bin/qemu/arm64/test_rigor_bbmalloc bin/qemu/arm64/test_rigor_bbmalloc_attach bin/qemu/arm64/test_rigor_bbmalloc_sizes bin/qemu/arm64/test_rigor_bbmalloc_overlap_probe bin/qemu/arm64/test_rigor_bbmalloc_realloc bin/qemu/arm64/test_rigor_bbmalloc_exhaust bin/qemu/arm64/test_rigor_bbmalloc_reset bin/qemu/arm64/test_rigor_bbmalloc_regions bin/qemu/arm64/test_rigor_bbmalloc_aligned bin/qemu/arm64/test_rigor_bbmalloc_traits bin/qemu/arm64/test_rigor_bbmalloc_containers bin/qemu/arm64/test_rigor_bbmalloc_harden bin/qemu/arm64/test_rigor_bbmalloc_stats bin/qemu/arm64/test_rigor_bbmalloc_c_aligned bin/qemu/arm64/test_rigor_bbmalloc_soak
+build bbmalloc_qemu: phony bbmalloc_qemu_arm32 bbmalloc_qemu_arm64

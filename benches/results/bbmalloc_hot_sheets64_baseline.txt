@@ -1,0 +1,19 @@
+# bbmalloc_hot_sheets64 baseline
+# date: 2026-09-07T08:34:06Z
+# host: Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz
+# compiler: g++ (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)
+# build: ninja bbmalloc_benches
+# target: bin/bench_bbmalloc_hot_sheets64
+# run: taskset -c 3 bin/bench_bbmalloc_hot_sheets64
+# runner: scripts/run_benchmarks --cpu 3
+# bbmalloc bench: hot path: random sizes within one bracket, alloc then free, sizes prefilled outside the timed window
+# profile: min_block=32 class_small=1024 sheet=16384 max_sheets=64 cache_cap=0
+# pool bytes=33554400 measurements=7 estimator=median cycles/op via rdtsc
+[hot 1-32 n=1000] alloc+free size=32 cycles/op=54.96 ns/op=18.56
+[hot 1-32 n=10000] alloc+free size=32 cycles/op=55.45 ns/op=18.51
+[hot 1-32 n=100000] alloc+free size=32 cycles/op=47.99 ns/op=16.00
+[hot 33-256 n=1000] alloc+free size=256 cycles/op=55.95 ns/op=18.90
+[hot 33-256 n=10000] alloc+free size=256 cycles/op=60.89 ns/op=20.32
+[hot 257-1024 n=1000] alloc+free size=1024 cycles/op=60.41 ns/op=20.38
+[hot 257-1024 n=10000] alloc+free size=1024 cycles/op=66.78 ns/op=22.30
+[hot 1025-4096 n=1000] alloc+free size=4096 cycles/op=55.60 ns/op=18.80

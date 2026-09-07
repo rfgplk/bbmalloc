@@ -1,0 +1,12 @@
+# bbmalloc_interleaved baseline
+# date: 2026-09-07T08:34:05Z
+# host: Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz
+# compiler: g++ (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)
+# build: ninja bbmalloc_benches
+# target: bin/bench_bbmalloc_interleaved
+# run: taskset -c 3 bin/bench_bbmalloc_interleaved
+# runner: scripts/run_benchmarks --cpu 3
+# bbmalloc bench: interleaved: sizes span both tiers (1 B .. 16 KiB) to defeat tier-dispatch prediction; alloc/free interleaved
+# profile: min_block=32 class_small=1024 sheet=16384 max_sheets=8 cache_cap=0
+# pool bytes=33554400 measurements=7 estimator=median cycles/op via rdtsc
+[interleaved] alloc+free window 64 size=16384 cycles/op=64.74 ns/op=21.59

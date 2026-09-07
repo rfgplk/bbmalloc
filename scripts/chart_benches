@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Render bbmalloc benchmark result files as README-ready charts.
+
+The parser accepts the readable rows emitted by benches/*.cpp.  The output is deliberately
+small and fixed: one operations figure, one hot-path figure, and one latency figure.  Use
+--mode github for images embedded in README.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
+
+PROFILES = {
+    "bbmalloc_baseline.txt": "default",
+    "bbmalloc_sheets64_baseline.txt": "max-sheets-64",
+    "bbmalloc_nolinks_baseline.txt": "link-checks-off",
+}
+HOT_PROFILES = {
+    "bbmalloc_hot_baseline.txt": "default",
+    "bbmalloc_hot_sheets64_baseline.txt": "max-sheets-64",
+}
+MIXED_RESULTS = {"bbmalloc_interleaved_baseline.txt": "default"}
+
+PROFILE_ORDER = ("default", "max-sheets-64", "link-checks-off")
+PROFILE_COLORS = {
+    "default": "#3987e5",
+    "max-sheets-64": "#d95926",
+    "link-checks-off": "#199e70",
+}
+PERCENTILE_COLORS = {
+    "p50": "#3987e5",
+    "p90": "#199e70",
+    "p99": "#c98500",
+    "p999": "#d55181",
+}
+THEMES = {
+    "light": {"surface": "#fcfcfb", "ink": "#0b0b0b", "muted": "#52514e", "grid": "#dedcd6", "outline": "#000000"},
+    "dark": {"surface": "#1a1a19", "ink": "#ffffff", "muted": "#c3c2b7", "grid": "#3a3a37", "outline": "#0b0b0b"},
+    "github": {"surface": "#0d1117", "ink": "#f0f6fc", "muted": "#9198a1", "grid": "#3d444d", "outline": "#010409"},
+}
+
+SIZE_ROW = re.compile(
+    r"^\[(?P<op>round-trip|pool|realloc|queries)\].*?size=(?P<size>\d+)"
+    r" cycles/op=(?P<cycles>[0-9.]+) ns/op=(?P<ns>[0-9.]+)$"
+)
+HOT_ROW = re.compile(
+    r"^\[hot (?P<bracket>[^]]+) n=(?P<count>\d+)\].*?"
+    r"size=(?P<size>\d+) cycles/op=(?P<cycles>[0-9.]+) ns/op=(?P<ns>[0-9.]+)$"
+)
+INTERLEAVED_ROW = re.compile(
+    r"^\[interleaved\].*?size=(?P<size>\d+) cycles/op=(?P<cycles>[0-9.]+) ns/op=(?P<ns>[0-9.]+)$"
+)
+LATENCY_ROW = re.compile(
+    r"^\[lat (?P<workload>[^]]+)\] (?P<op>alloc|free) n=(?P<n>\d+)"
+    r" p50=(?P<p50>\d+) p90=(?P<p90>\d+) p99=(?P<p99>\d+)"
+    r" p999=(?P<p999>\d+) max=(?P<max>\d+)$"
+)
+
+
+def require_files(results_dir: Path, names: dict[str, str]) -> None:
+    missing = [name for name in names if not (results_dir / name).is_file()]
+    if missing:
+        raise SystemExit("chart_benches: missing result files: " + ", ".join(missing))
+
+
+def parse_file(path: Path, profile: str) -> list[dict]:
+    rows: list[dict] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        match = SIZE_ROW.match(line)
+        if match:
+            row = match.groupdict()
+            rows.append(
+                {
+                    "kind": row["op"],
+                    "profile": profile,
+                    "size": int(row["size"]),
+                    "cycles": float(row["cycles"]),
+                    "ns": float(row["ns"]),
+                }
+            )
+            continue
+
+        match = HOT_ROW.match(line)
+        if match:
+            row = match.groupdict()
+            rows.append(
+                {
+                    "kind": "hot",
+                    "profile": profile,
+                    "bracket": row["bracket"],
+                    "count": int(row["count"]),
+                    "size": int(row["size"]),
+                    "cycles": float(row["cycles"]),
+                    "ns": float(row["ns"]),
+                }
+            )
+            continue
+
+        match = INTERLEAVED_ROW.match(line)
+        if match:
+            row = match.groupdict()
+            rows.append(
+                {
+                    "kind": "interleaved",
+                    "profile": profile,
+                    "size": int(row["size"]),
+                    "cycles": float(row["cycles"]),
+                    "ns": float(row["ns"]),
+                }
+            )
+            continue
+
+        match = LATENCY_ROW.match(line)
+        if match:
+            row = match.groupdict()
+            rows.append(
+                {
+                    "kind": "latency",
+                    "profile": profile,
+                    "workload": row["workload"],
+                    "op": row["op"],
+                    "n": int(row["n"]),
+                    **{key: int(row[key]) for key in ("p50", "p90", "p99", "p999", "max")},
+                }
+            )
+    return rows
+
+
+def style_axes(ax, theme: dict) -> None:
+    ax.set_facecolor(theme["surface"])
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(theme["grid"])
+        ax.spines[side].set_linewidth(1.0)
+    ax.tick_params(colors=theme["muted"], labelsize=8.5, length=3, width=1.0)
+    ax.xaxis.label.set_color(theme["muted"])
+    ax.yaxis.label.set_color(theme["muted"])
+    ax.title.set_color(theme["ink"])
+    ax.grid(axis="y", color=theme["grid"], linewidth=1.0, zorder=0)
+    ax.set_axisbelow(True)
+
+
+def finish(fig, theme: dict, note: str, rect=(0.06, 0.12, 0.98, 0.92)) -> None:
+    fig.text(0.5, 0.025, note, fontsize=7.5, color=theme["muted"], ha="center")
+    fig.tight_layout(rect=rect)
+
+
+def fmt_size(value: float, _position: int) -> str:
+    if value >= 1 << 20:
+        return f"{value / (1 << 20):g} MiB"
+    if value >= 1 << 10:
+        return f"{value / (1 << 10):g} KiB"
+    return f"{value:g} B"
+
+
+def save(fig, path: Path, theme: dict) -> None:
+    fig.savefig(path, dpi=150, facecolor=theme["surface"])
+    plt.close(fig)
+    print(path)
+
+
+def draw_operations(rows: list[dict], path: Path, theme: dict) -> None:
+    fig, axes = plt.subplots(2, 2, figsize=(14, 9), facecolor=theme["surface"])
+    axes = axes.ravel()
+    for ax in axes:
+        style_axes(ax, theme)
+
+    for ax, kind, title in (
+        (axes[0], "round-trip", "alloc + dealloc"),
+        (axes[1], "pool", "alloc-all + free-all"),
+        (axes[2], "realloc", "small + big + small realloc"),
+    ):
+        for profile in PROFILE_ORDER:
+            selected = [r for r in rows if r["kind"] == kind and r["profile"] == profile]
+            selected.sort(key=lambda r: r["size"])
+            if not selected:
+                continue
+            ax.plot(
+                [r["size"] for r in selected],
+                [r["cycles"] for r in selected],
+                marker="o",
+                markersize=3.5,
+                linewidth=1.7,
+                label=profile,
+                color=PROFILE_COLORS[profile],
+            )
+        ax.set_xscale("log", base=2)
+        ax.set_yscale("log")
+        ax.xaxis.set_major_formatter(FuncFormatter(fmt_size))
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel("requested size")
+        ax.set_ylabel("cycles/op · lower is better")
+
+    categories = ["interleaved\nwindow 64", "queries\nsize 300"]
+    x_positions = list(range(len(categories)))
+    width = 0.24
+    for index, profile in enumerate(PROFILE_ORDER):
+        values = []
+        for kind in ("interleaved", "queries"):
+            selected = [r for r in rows if r["kind"] == kind and r["profile"] == profile]
+            values.append(selected[0]["cycles"] if selected else math.nan)
+        offsets = [x + (index - 1) * width for x in x_positions]
+        axes[3].bar(
+            offsets,
+            values,
+            width * 0.9,
+            label=profile,
+            color=PROFILE_COLORS[profile],
+            edgecolor=theme["outline"],
+            linewidth=0.7,
+        )
+    axes[3].set_title("representative mixed operations", fontsize=11)
+    axes[3].set_ylabel("cycles/op · lower is better")
+    axes[3].set_xticks(x_positions)
+    axes[3].set_xticklabels(categories)
+    axes[3].set_yscale("log")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    legend = fig.legend(handles, labels, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.985), framealpha=0.9, facecolor=theme["surface"], edgecolor=theme["grid"], fontsize=8.5)
+    for text in legend.get_texts():
+        text.set_color(theme["ink"])
+    finish(fig, theme, "32 MiB static pool · -O2 -march=native · medians of 7 · missing profile rows are not run")
+    save(fig, path, theme)
+
+
+def draw_hot(rows: list[dict], path: Path, theme: dict) -> None:
+    brackets = list(dict.fromkeys(r["bracket"] for r in rows if r["kind"] == "hot"))
+    fig, axes = plt.subplots(1, len(brackets), figsize=(15, 5.5), sharey=True, facecolor=theme["surface"])
+    if len(brackets) == 1:
+        axes = [axes]
+    for ax, bracket in zip(axes, brackets):
+        style_axes(ax, theme)
+        for profile in ("default", "max-sheets-64"):
+            selected = [r for r in rows if r["kind"] == "hot" and r["bracket"] == bracket and r["profile"] == profile]
+            selected.sort(key=lambda r: r["count"])
+            if not selected:
+                continue
+            ax.plot(
+                [r["count"] for r in selected],
+                [r["cycles"] for r in selected],
+                marker="o",
+                markersize=4,
+                linewidth=1.8,
+                label=profile,
+                color=PROFILE_COLORS[profile],
+            )
+        ax.set_xscale("log")
+        ax.set_title(f"{bracket} B", fontsize=11)
+        ax.set_xlabel("alloc/free pairs per pass")
+        ax.set_ylabel("cycles/op · lower is better")
+    handles, labels = axes[0].get_legend_handles_labels()
+    legend = fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 0.995), framealpha=0.9, facecolor=theme["surface"], edgecolor=theme["grid"], fontsize=8.5)
+    for text in legend.get_texts():
+        text.set_color(theme["ink"])
+    fig.suptitle("bbmalloc hot path — random sizes within each bracket", color=theme["ink"], fontsize=13, y=0.94)
+    finish(fig, theme, "sizes are prefilled outside the timed region · 32 MiB static pool · medians of 7", rect=(0.04, 0.13, 0.99, 0.87))
+    save(fig, path, theme)
+
+
+def draw_latency(rows: list[dict], path: Path, theme: dict) -> None:
+    selected = [r for r in rows if r["kind"] == "latency" and r["profile"] == "default"]
+    selected.sort(key=lambda r: (r["workload"], r["op"]))
+    labels = [f"{r['workload']}\n{r['op']}" for r in selected]
+    percentiles = ("p50", "p90", "p99", "p999")
+    fig, ax = plt.subplots(figsize=(14, 6), facecolor=theme["surface"])
+    style_axes(ax, theme)
+    x_positions = list(range(len(selected)))
+    width = 0.18
+    for index, percentile in enumerate(percentiles):
+        values = [r[percentile] for r in selected]
+        offsets = [x + (index - 1.5) * width for x in x_positions]
+        ax.bar(
+            offsets,
+            values,
+            width * 0.9,
+            label=percentile,
+            color=PERCENTILE_COLORS[percentile],
+            edgecolor=theme["outline"],
+            linewidth=0.7,
+        )
+    ax.set_yscale("log")
+    ax.set_ylabel("cycles per call · lower is better · log scale")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(labels, rotation=25, ha="right", fontsize=8.5)
+    ax.set_title("bbmalloc per-call latency distribution", color=theme["ink"], fontsize=13, pad=12)
+    legend = ax.legend(ncol=4, loc="upper left", framealpha=0.9, facecolor=theme["surface"], edgecolor=theme["grid"], fontsize=8.5)
+    for text in legend.get_texts():
+        text.set_color(theme["ink"])
+    finish(fig, theme, "fenced rdtsc · 65,536 samples per operation · max values remain in benches/results but are omitted from this percentile plot")
+    save(fig, path, theme)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--results", type=Path, default=Path("benches/results"))
+    parser.add_argument("--out", type=Path, default=Path("benches/charts"))
+    parser.add_argument("--mode", choices=tuple(THEMES), default="github")
+    args = parser.parse_args()
+
+    all_names = {**PROFILES, **HOT_PROFILES, **MIXED_RESULTS, "bbmalloc_latency_baseline.txt": "default"}
+    require_files(args.results, all_names)
+    args.out.mkdir(parents=True, exist_ok=True)
+    rows: list[dict] = []
+    for filename, profile in PROFILES.items():
+        rows.extend(parse_file(args.results / filename, profile))
+    for filename, profile in HOT_PROFILES.items():
+        rows.extend(parse_file(args.results / filename, profile))
+    for filename, profile in MIXED_RESULTS.items():
+        rows.extend(parse_file(args.results / filename, profile))
+    rows.extend(parse_file(args.results / "bbmalloc_latency_baseline.txt", "default"))
+
+    if not any(r["kind"] == "round-trip" for r in rows):
+        raise SystemExit("chart_benches: no size-sweep rows found")
+    if not any(r["kind"] == "hot" for r in rows):
+        raise SystemExit("chart_benches: no hot-path rows found")
+    if not any(r["kind"] == "latency" for r in rows):
+        raise SystemExit("chart_benches: no latency rows found")
+
+    theme = THEMES[args.mode]
+    draw_operations(rows, args.out / f"size-operations-cycles.{args.mode}.png", theme)
+    draw_hot(rows, args.out / f"hot-path-cycles.{args.mode}.png", theme)
+    draw_latency(rows, args.out / f"latency-percentiles.{args.mode}.png", theme)
+    print("chart_benches: 3 figures written")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

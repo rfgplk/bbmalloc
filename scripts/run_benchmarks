@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Build and run bbmalloc's hosted benchmarks into reproducible result files.
+
+The benchmark programs deliberately keep their output human-readable.  This runner adds
+the provenance that belongs outside the timed region and stores one clean result file per
+target, so charting never has to guess where one profile ends and another begins.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+TARGETS = (
+    ("bbmalloc", "bin/bench_bbmalloc", "bbmalloc_baseline.txt"),
+    ("bbmalloc_hot", "bin/bench_bbmalloc_hot", "bbmalloc_hot_baseline.txt"),
+    ("bbmalloc_interleaved", "bin/bench_bbmalloc_interleaved", "bbmalloc_interleaved_baseline.txt"),
+    ("bbmalloc_latency", "bin/bench_bbmalloc_latency", "bbmalloc_latency_baseline.txt"),
+    ("bbmalloc_hot_sheets64", "bin/bench_bbmalloc_hot_sheets64", "bbmalloc_hot_sheets64_baseline.txt"),
+    ("bbmalloc_sheets64", "bin/bench_bbmalloc_sheets64", "bbmalloc_sheets64_baseline.txt"),
+    ("bbmalloc_nolinks", "bin/bench_bbmalloc_nolinks", "bbmalloc_nolinks_baseline.txt"),
+)
+
+
+def host_cpu() -> str:
+    try:
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.lower().startswith("model name") and ":" in line:
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine()
+
+
+def compiler_version(cxx: str) -> str:
+    try:
+        out = subprocess.check_output([cxx, "--version"], text=True, stderr=subprocess.STDOUT)
+        return out.splitlines()[0].strip()
+    except (OSError, subprocess.CalledProcessError, IndexError):
+        return cxx
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def run_checked(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    print("$", " ".join(command), flush=True)
+    return subprocess.run(
+        command,
+        check=True,
+        text=True,
+        capture_output=capture,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cpu", type=int, default=3, help="CPU passed to taskset (default: 3)")
+    parser.add_argument("--results", type=Path, default=Path("benches/results"))
+    parser.add_argument("--cxx", default="g++", help="compiler name recorded in provenance")
+    parser.add_argument("--no-build", action="store_true", help="use already-built benchmark binaries")
+    args = parser.parse_args()
+
+    cpu_count = os.cpu_count() or 1
+    if args.cpu < 0 or args.cpu >= cpu_count:
+        parser.error(f"--cpu must be between 0 and {cpu_count - 1}")
+
+    if not args.no_build:
+        run_checked(["ninja", "bbmalloc_benches"])
+
+    args.results.mkdir(parents=True, exist_ok=True)
+    host = host_cpu()
+    compiler = compiler_version(args.cxx)
+    runner = "scripts/run_benchmarks " + " ".join(sys.argv[1:])
+
+    for name, binary, filename in TARGETS:
+        path = args.results / filename
+        command = ["taskset", "-c", str(args.cpu), binary]
+        completed = run_checked(command, capture=True)
+        # micron's diagnostic printer writes benchmark output to stderr on hosted builds;
+        # retain either stream so the result format does not depend on the selected port.
+        output = completed.stdout + completed.stderr
+        if "# bbmalloc bench:" not in output or (
+            "cycles/op=" not in output and "p50=" not in output
+        ):
+            if completed.stderr:
+                sys.stderr.write(completed.stderr)
+            raise SystemExit(f"{binary} completed without benchmark rows; refusing to write {path}")
+
+        header = [
+            f"# {name} baseline",
+            f"# date: {utc_now()}",
+            f"# host: {host}",
+            f"# compiler: {compiler}",
+            "# build: ninja bbmalloc_benches",
+            f"# target: {binary}",
+            f"# run: {' '.join(command)}",
+            f"# runner: {runner}",
+        ]
+        content = "\n".join(header) + "\n" + output.rstrip() + "\n"
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=args.results, prefix=f".{filename}.", delete=False
+        ) as temp:
+            temp.write(content)
+            temp_path = Path(temp.name)
+        temp_path.replace(path)
+        print(f"wrote {path}")
+
+    print(f"completed {len(TARGETS)} benchmark targets on CPU {args.cpu}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

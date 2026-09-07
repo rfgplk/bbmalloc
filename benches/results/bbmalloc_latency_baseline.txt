@@ -1,0 +1,19 @@
+# bbmalloc_latency baseline
+# date: 2026-09-07T08:34:05Z
+# host: Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz
+# compiler: g++ (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)
+# build: ninja bbmalloc_benches
+# target: bin/bench_bbmalloc_latency
+# run: taskset -c 3 bin/bench_bbmalloc_latency
+# runner: scripts/run_benchmarks --cpu 3
+# bbmalloc bench: per-op latency: fenced rdtsc around each call, percentiles over 65536 samples per op kind
+# profile: min_block=32 class_small=1024 sheet=16384 max_sheets=8 cache_cap=0
+# pool bytes=33554400 measurements=7 estimator=median cycles/op via rdtsc
+[lat tlsf-churn] alloc n=65536 p50=116 p90=148 p99=196 p999=240 max=67240
+[lat tlsf-churn] free n=65536 p50=120 p90=172 p99=232 p999=288 max=760
+[lat buddy-churn] alloc n=65536 p50=84 p90=112 p99=204 p999=7344 max=118320
+[lat buddy-churn] free n=65536 p50=96 p90=148 p99=236 p999=352 max=20328
+[lat mixed] alloc n=65536 p50=108 p90=140 p99=148 p999=176 max=14620
+[lat mixed] free n=65536 p50=116 p90=176 p99=236 p999=324 max=16908
+[lat sheet-oscillation] alloc n=65536 p50=112 p90=112 p99=112 p999=244 max=292
+[lat sheet-oscillation] free n=65536 p50=112 p90=112 p99=116 p999=292 max=12504

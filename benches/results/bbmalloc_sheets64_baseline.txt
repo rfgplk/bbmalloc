@@ -1,0 +1,41 @@
+# bbmalloc_sheets64 baseline
+# date: 2026-09-07T08:34:06Z
+# host: Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz
+# compiler: g++ (GCC) 16.2.1 20260819 (Red Hat 16.2.1-2)
+# build: ninja bbmalloc_benches
+# target: bin/bench_bbmalloc_sheets64
+# run: taskset -c 3 bin/bench_bbmalloc_sheets64
+# runner: scripts/run_benchmarks --cpu 3
+# bbmalloc bench: round-trip alloc+dealloc, pool alloc-all-then-free-all, realloc small-big-small, queries
+# profile: min_block=32 class_small=1024 sheet=16384 max_sheets=64 cache_cap=0
+# pool bytes=33554400 measurements=7 estimator=median cycles/op via rdtsc
+[round-trip] alloc+dealloc size=16 cycles/op=126.96 ns/op=42.45
+[round-trip] alloc+dealloc size=32 cycles/op=126.97 ns/op=42.45
+[round-trip] alloc+dealloc size=64 cycles/op=127.03 ns/op=42.48
+[round-trip] alloc+dealloc size=128 cycles/op=127.05 ns/op=42.48
+[round-trip] alloc+dealloc size=256 cycles/op=126.96 ns/op=42.44
+[round-trip] alloc+dealloc size=512 cycles/op=126.96 ns/op=42.45
+[round-trip] alloc+dealloc size=1024 cycles/op=126.95 ns/op=42.45
+[round-trip] alloc+dealloc size=2048 cycles/op=53.97 ns/op=18.11
+[round-trip] alloc+dealloc size=4096 cycles/op=53.95 ns/op=18.23
+[round-trip] alloc+dealloc size=16384 cycles/op=73.30 ns/op=25.50
+[round-trip] alloc+dealloc size=65536 cycles/op=54.25 ns/op=21.68
+[round-trip] alloc+dealloc size=262144 cycles/op=55.12 ns/op=32.78
+[round-trip] alloc+dealloc size=1048576 cycles/op=55.50 ns/op=76.12
+[pool] alloc-all,free-all size=16 cycles/op=128.08 ns/op=42.86
+[pool] alloc-all,free-all size=32 cycles/op=128.81 ns/op=43.07
+[pool] alloc-all,free-all size=64 cycles/op=130.10 ns/op=43.51
+[pool] alloc-all,free-all size=128 cycles/op=103.29 ns/op=34.54
+[pool] alloc-all,free-all size=256 cycles/op=106.40 ns/op=35.58
+[pool] alloc-all,free-all size=512 cycles/op=103.24 ns/op=34.52
+[pool] alloc-all,free-all size=1024 cycles/op=103.35 ns/op=34.62
+[pool] alloc-all,free-all size=2048 cycles/op=101.83 ns/op=34.13
+[pool] alloc-all,free-all size=4096 cycles/op=106.17 ns/op=35.72
+[pool] alloc-all,free-all size=16384 cycles/op=106.69 ns/op=36.41
+[pool] alloc-all,free-all size=65536 cycles/op=113.22 ns/op=40.80
+[pool] alloc-all,free-all size=262144 cycles/op=96.28 ns/op=43.65
+[pool] alloc-all,free-all size=1048576 cycles/op=92.62 ns/op=76.87
+[realloc] small-big-small size=64 cycles/op=204.19 ns/op=68.42
+[realloc] small-big-small size=1024 cycles/op=185.15 ns/op=62.10
+[realloc] small-big-small size=8192 cycles/op=339.00 ns/op=113.37
+[queries] query_size+is_present+within size=300 cycles/op=27.63 ns/op=9.30
