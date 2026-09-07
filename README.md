@@ -1,3 +1,5 @@
+<img align="left" width="300" src="https://github.com/user-attachments/assets/fa6dd9ad-77aa-48fc-aaf4-726e7c1924b0" alt="bb_logo"/>
+
 ### *bbmalloc*
 
 #### a deterministic, fixed-region memory allocator
